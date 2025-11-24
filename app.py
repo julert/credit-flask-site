@@ -134,7 +134,6 @@ document.getElementById('creditForm').addEventListener('submit', async (e)=>{
 </html>
 """
 
-
 # ----------------- бизнес-логика -----------------
 def scoring(data: dict) -> dict:
     """
@@ -183,23 +182,29 @@ def scoring(data: dict) -> dict:
     else:
         score += 5
 
-    # 4-6. Доходы
-    income = int(data['income'])
-    spouse_income = int(data.get('spouse_income') or 0)
-    total_income = income + spouse_income
-    if total_income < 2 * LIVING_WAGE:
-        return {"ok": False, "message": "Отказ: совокупный доход семьи менее 2 прожиточных минимумов."}
+    # 4. ДОХОД ТОЛЬКО КЛИЕНТА (без супруга)
+    client_income = int(data['income'])
+    if client_income < 2 * LIVING_WAGE:
+        return {"ok": False, "message": "Отказ: доход клиента менее 2 прожиточных минимумов."}
 
-    # 7. Иждивенцы
+    # 5. Семейное положение и доход супруга
+    spouse_income = int(data.get('spouse_income') or 0)  # нужен только на иждивенцев
+    marital = data['marital']
+
+    # 6. Иждивенцы
     dep = int(data.get('dependents') or 0)
-    needed = dep * LIVING_WAGE
-    if total_income - needed < LIVING_WAGE:
-        return {"ok": False, "message": "Отказ: после учёта иждивенцев остаётся менее 1 прожиточного минимума."}
+    # сколько человек нужно прокормить: клиент + супруг(а) + дети
+    family_size = 1 + (1 if marital == 'женат/замужем' else 0) + dep
+    required_for_family = family_size * LIVING_WAGE
+    # деньги на семью: доход клиента + доход супруга
+    total_family_money = client_income + spouse_income
+    if total_family_money < required_for_family:
+        return {"ok": False, "message": "Отказ: совокупные доходы семьи не покрывают прожиточный минимум."}
     if dep > 3:
         score -= 5
         notes.append("Многодетность")
 
-    # 8. Кредитная история
+    # 7. Кредитная история
     ch = data['credit_history']
     if ch == 'плохая':
         score -= 20
@@ -210,15 +215,19 @@ def scoring(data: dict) -> dict:
     else:
         score += 10
 
-    # 9-10. Сумма и срок
+    # 8. Сумма и срок
     amount = int(data['amount'])
-    term = int(data['term'])
-    rate = BASE_RATE_MONTH
+    term   = int(data['term'])
+    rate   = BASE_RATE_MONTH
     if score < 0:
-        rate += 0.005  # добавка 0,5 % если «слабый» клиент
-    payment = math.ceil(amount * (rate * (1 + rate) ** term) / ((1 + rate) ** term - 1))
-    if payment > MAX_PAYMENT_SHARE * total_income:
-        return {"ok": False, "message": "Отказ: платёж превышает 45 % совокупного дохода семьи."}
+        rate += 0.005  # надбавка 0,5 % в месяц
+
+    # ПЛАТЁЖ ДОЛЖЕН УКЛАДЫВАТЬСЯ ТОЛЬКО В ДОХОД КЛИЕНТА
+    payment = math.ceil(
+        amount * (rate * (1 + rate) ** term) / ((1 + rate) ** term - 1)
+    )
+    if payment > MAX_PAYMENT_SHARE * client_income:   # <-- только клиент!
+        return {"ok": False, "message": "Отказ: платёж превышает 45 % личного дохода клиента."}
 
     # Итог
     if score >= 0:
@@ -249,4 +258,5 @@ if __name__ == '__main__':
     # app.py (конец файла)
 if __name__ == '__main__':
     app.run(debug=True)   # локально
+
 # при запуске gunicorn эта часть игнорируется
